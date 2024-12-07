@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PRISM News</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
+</head>
+<body class="bg-gray-900 text-gray-100">
+    <div id="app" class="min-h-screen">
+        <!-- Header with fixed position -->
+        <header class="fixed top-0 left-0 right-0 bg-gray-800 shadow-lg z-10">
+            <div class="max-w-4xl mx-auto px-4 py-3 sm:px-8 sm:py-4">
+                <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
+                    <h1 class="text-2xl sm:text-3xl font-bold">Latest News</h1>
+                    <div class="flex gap-2">
+                        <button 
+                            @click="showDebug = !showDebug"
+                            class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm flex-grow sm:flex-grow-0"
+                        >
+                            {{ showDebug ? 'Hide Debug' : 'Show Debug' }}
+                        </button>
+                        <button 
+                            @click="darkMode = !darkMode"
+                            class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm"
+                        >
+                            🌓
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Spacer div to prevent header overlap -->
+        <div class="h-28 sm:h-24"></div>
+
+        <!-- Main content -->
+        <main class="p-4 sm:p-8">
+            <div class="max-w-4xl mx-auto">
+                <!-- Debug Info -->
+                <div v-if="showDebug && debugInfo" class="mb-4 p-3 sm:p-4 bg-gray-800 rounded-lg text-sm sm:text-base overflow-x-auto">
+                    <h3 class="font-bold mb-2">Debug Information:</h3>
+                    <pre class="whitespace-pre-wrap text-xs sm:text-sm text-gray-300">{{ debugInfo }}</pre>
+                </div>
+
+                <!-- Loading State -->
+                <div v-if="loading" class="text-lg sm:text-xl text-center animate-pulse">
+                    Loading news...
+                </div>
+
+                <!-- Error State -->
+                <div v-if="error" class="text-red-400 bg-red-900/50 p-3 sm:p-4 rounded-lg">
+                    <p class="font-bold">Error:</p>
+                    <p>{{ error }}</p>
+                    <p v-if="errorDetails" class="mt-2 text-xs sm:text-sm">
+                        <strong>Details:</strong> {{ errorDetails }}
+                    </p>
+                </div>
+
+                <!-- News Items -->
+                <div v-if="!loading && !error" class="space-y-4 sm:space-y-6">
+                    <div v-for="item in news" 
+                         :key="item.id" 
+                         class="bg-gray-800 rounded-lg shadow-lg p-4 sm:p-6 transform transition-transform touch-pan-y"
+                         :class="{ 'scale-98': item.isPressed }"
+                         @touchstart="item.isPressed = true"
+                         @touchend="item.isPressed = false"
+                         v-touch:swipe.left="() => saveItem(item)"
+                         v-touch:swipe.right="() => dismissItem(item)">
+                        
+                        <div class="flex justify-between items-start gap-4">
+                            <h2 class="text-lg sm:text-xl font-semibold flex-grow">{{ item.title }}</h2>
+                            <button @click="toggleSaved(item)" 
+                                    class="shrink-0 p-2 hover:bg-gray-700 rounded-full transition-colors">
+                                {{ item.saved ? '⭐' : '☆' }}
+                            </button>
+                        </div>
+                        
+                        <p class="text-gray-300 my-4 text-sm sm:text-base">{{ item.content }}</p>
+                        
+                        <div class="flex flex-col sm:flex-row gap-2 text-xs sm:text-sm text-gray-400">
+                            <span>Source: {{ item.source }}</span>
+                            <span class="hidden sm:inline">•</span>
+                            <span>{{ new Date(item.timestamp).toLocaleString() }}</span>
+                        </div>
+
+                        <!-- Reactions Bar -->
+                        <div class="mt-4 flex items-center gap-3 border-t border-gray-700 pt-4 overflow-x-auto">
+                            <button v-for="reaction in reactions" 
+                                    :key="reaction.emoji"
+                                    @click="addReaction(item, reaction.name)"
+                                    class="flex items-center gap-1 px-2 py-1 rounded-full hover:bg-gray-700 transition-colors shrink-0"
+                                    :class="{ 'bg-gray-700': item.reactions?.[reaction.name] }">
+                                <span>{{ reaction.emoji }}</span>
+                                <span class="text-xs">{{ item.reactions?.[reaction.name] || 0 }}</span>
+                            </button>
+                        </div>
+
+                        <a v-if="item.url" 
+                           :href="item.url" 
+                           target="_blank" 
+                           class="mt-4 inline-block text-blue-400 hover:text-blue-300 text-sm sm:text-base">
+                            Read more →
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script>
+        const { createApp, ref, onMounted } = Vue;
+
+        // Vue touch directive for swipe gestures
+        const touch = {
+            mounted(el, binding) {
+                if (typeof binding.value === 'function') {
+                    const mc = new Hammer(el);
+                    const direction = binding.arg === 'left' ? 'left' : 'right';
+                    mc.on('swipe', (ev) => {
+                        if (ev.direction === (direction === 'left' ? 2 : 4)) {
+                            binding.value();
+                        }
+                    });
+                }
+            }
+        };
+
+        createApp({
+            directives: {
+                touch
+            },
+            setup() {
+                const news = ref([]);
+                const loading = ref(true);
+                const error = ref(null);
+                const errorDetails = ref(null);
+                const debugInfo = ref(null);
+                const showDebug = ref(false);
+                const darkMode = ref(true);
+
+                const reactions = [
+                    { name: 'like', emoji: '👍' },
+                    { name: 'insightful', emoji: '💡' },
+                    { name: 'surprised', emoji: '😮' },
+                    { name: 'sad', emoji: '😢' }
+                ];
+
+                function logDebug(message, data) {
+                    const timestamp = new Date().toISOString();
+                    const debugMessage = `[${timestamp}] ${message}`;
+                    console.log(debugMessage, data);
+                    debugInfo.value = (debugInfo.value ? debugInfo.value + '\n' : '') + debugMessage;
+                    if (data) {
+                        debugInfo.value += '\n' + JSON.stringify(data, null, 2);
+                    }
+                }
+
+                function addReaction(item, reactionName) {
+                    if (!item.reactions) {
+                        item.reactions = {};
+                    }
+                    item.reactions[reactionName] = (item.reactions[reactionName] || 0) + 1;
+                }
+
+                function toggleSaved(item) {
+                    item.saved = !item.saved;
+                    logDebug(`Article ${item.saved ? 'saved' : 'unsaved'}:`, item.title);
+                }
+
+                function saveItem(item) {
+                    item.saved = true;
+                    logDebug('Article saved via swipe:', item.title);
+                }
+
+                function dismissItem(item) {
+                    item.dismissed = true;
+                    logDebug('Article dismissed via swipe:', item.title);
+                }
+
+                async function fetchNews() {
+                    const apiUrl = 'https://eb15a5ge00.execute-api.eu-central-1.amazonaws.com/alpha/news';
+                    logDebug('Initiating fetch request to:', apiUrl);
+
+                    try {
+                        const response = await fetch(apiUrl);
+                        logDebug('Response status:', {
+                            status: response.status,
+                            statusText: response.statusText,
+                            headers: Object.fromEntries(response.headers.entries())
+                        });
+
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+
+                        const data = await response.json();
+                        logDebug('Received data:', data);
+
+                        // Initialize additional properties for each news item
+                        news.value = data.map(item => ({
+                            ...item,
+                            saved: false,
+                            dismissed: false,
+                            isPressed: false,
+                            reactions: {}
+                        }));
+                        loading.value = false;
+                    } catch (err) {
+                        console.error('Fetch error:', err);
+                        error.value = 'Failed to fetch news';
+                        errorDetails.value = err.message;
+                        loading.value = false;
+
+                        logDebug('Error details:', {
+                            message: err.message,
+                            stack: err.stack,
+                            type: err.name
+                        });
+                    }
+                }
+
+                onMounted(() => {
+                    logDebug('Component mounted, initiating fetch');
+                    fetchNews();
+                });
+
+                return {
+                    news,
+                    loading,
+                    error,
+                    errorDetails,
+                    debugInfo,
+                    showDebug,
+                    darkMode,
+                    reactions,
+                    addReaction,
+                    toggleSaved,
+                    saveItem,
+                    dismissItem
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
